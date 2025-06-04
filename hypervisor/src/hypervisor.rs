@@ -145,7 +145,7 @@ pub trait Hypervisor: Send + Sync {
     /// Get the number of supported hardware breakpoints
     ///
     fn get_guest_debug_hw_bps(&self) -> usize {
-        unimplemented!()
+        return 0;
     }
 
     /// Get maximum number of vCPUs
