@@ -211,6 +211,16 @@ pub enum Error {
     /// Cannot apply landlock based sandboxing
     #[error("Error applying landlock: {0}")]
     ApplyLandlock(#[source] LandlockError),
+
+    /// Cannot pause the VM
+    #[cfg(feature = "guest_debug")]
+    #[error("Failed to pause the VM: {0}")]
+    VmPause(#[source] VmError),
+
+    /// Cannot coredump the VM
+    #[cfg(feature = "guest_debug")]
+    #[error("Failed to coredump the VM: {0}")]
+    VmCoredump(#[source] VmError),
 }
 pub type Result<T> = result::Result<T, Error>;
 
@@ -222,6 +232,7 @@ pub enum EpollDispatch {
     Api = 2,
     ActivateVirtioDevices = 3,
     Debug = 4,
+    Pause = 5,
     Unknown,
 }
 
@@ -497,6 +508,7 @@ pub fn start_vmm_thread(
     #[cfg(feature = "guest_debug")] debug_path: Option<PathBuf>,
     #[cfg(feature = "guest_debug")] debug_event: EventFd,
     #[cfg(feature = "guest_debug")] vm_debug_event: EventFd,
+    #[cfg(feature = "guest_debug")] pause_event: EventFd,
     exit_event: EventFd,
     seccomp_action: &SeccompAction,
     hypervisor: Arc<dyn hypervisor::Hypervisor>,
@@ -539,6 +551,7 @@ pub fn start_vmm_thread(
                     vmm_seccomp_action,
                     hypervisor,
                     exit_event,
+                    pause_event,
                 )?;
 
                 vmm.setup_signal_handler(landlock_enable)?;
@@ -650,6 +663,8 @@ pub struct Vmm {
     epoll: EpollContext,
     exit_evt: EventFd,
     reset_evt: EventFd,
+    #[cfg(feature = "guest_debug")]
+    pause_evt: EventFd,
     api_evt: EventFd,
     #[cfg(feature = "guest_debug")]
     debug_evt: EventFd,
@@ -772,6 +787,7 @@ impl Vmm {
         seccomp_action: SeccompAction,
         hypervisor: Arc<dyn hypervisor::Hypervisor>,
         exit_evt: EventFd,
+        #[cfg(feature = "guest_debug")] pause_evt: EventFd,
     ) -> Result<Self> {
         let mut epoll = EpollContext::new().map_err(Error::Epoll)?;
         let reset_evt = EventFd::new(EFD_NONBLOCK).map_err(Error::EventFdCreate)?;
@@ -795,6 +811,11 @@ impl Vmm {
 
         #[cfg(feature = "guest_debug")]
         epoll
+            .add_event(&pause_evt, EpollDispatch::Pause)
+            .map_err(Error::Epoll)?;
+
+        #[cfg(feature = "guest_debug")]
+        epoll
             .add_event(&debug_evt, EpollDispatch::Debug)
             .map_err(Error::Epoll)?;
 
@@ -802,6 +823,8 @@ impl Vmm {
             epoll,
             exit_evt,
             reset_evt,
+            #[cfg(feature = "guest_debug")]
+            pause_evt,
             api_evt,
             #[cfg(feature = "guest_debug")]
             debug_evt,
@@ -936,6 +959,10 @@ impl Vmm {
             MigratableError::MigrateReceive(anyhow!("Error cloning reset EventFd: {}", e))
         })?;
         #[cfg(feature = "guest_debug")]
+        let pause_evt = self.pause_evt.try_clone().map_err(|e| {
+            MigratableError::MigrateReceive(anyhow!("Error cloning pause EventFd: {}", e))
+        })?;
+        #[cfg(feature = "guest_debug")]
         let debug_evt = self.vm_debug_evt.try_clone().map_err(|e| {
             MigratableError::MigrateReceive(anyhow!("Error cloning debug EventFd: {}", e))
         })?;
@@ -952,6 +979,8 @@ impl Vmm {
             hypervisor_vm,
             exit_evt,
             reset_evt,
+            #[cfg(feature = "guest_debug")]
+            pause_evt,
             #[cfg(feature = "guest_debug")]
             debug_evt,
             &self.seccomp_action,
@@ -1312,6 +1341,8 @@ impl Vmm {
         let exit_evt = self.exit_evt.try_clone().map_err(VmError::EventFdClone)?;
         let reset_evt = self.reset_evt.try_clone().map_err(VmError::EventFdClone)?;
         #[cfg(feature = "guest_debug")]
+        let pause_evt = self.pause_evt.try_clone().map_err(VmError::EventFdClone)?;
+        #[cfg(feature = "guest_debug")]
         let debug_evt = self
             .vm_debug_evt
             .try_clone()
@@ -1325,6 +1356,8 @@ impl Vmm {
             vm_config,
             exit_evt,
             reset_evt,
+            #[cfg(feature = "guest_debug")]
+            pause_evt,
             #[cfg(feature = "guest_debug")]
             debug_evt,
             &self.seccomp_action,
@@ -1431,6 +1464,19 @@ impl Vmm {
                         }
                     }
                     #[cfg(feature = "guest_debug")]
+                    EpollDispatch::Pause => {
+                        event!("vm", "panic");
+                        self.pause_evt.read().map_err(Error::EventFdRead)?;
+                        self.vm_pause().map_err(Error::VmPause)?;
+                        let coredump_data = crate::api::VmCoredumpData {
+                            destination_url: "file:///tmp/clhvm.dump".to_string(),
+                        };
+                        let coredump_request = serde_json::to_string(&coredump_data).unwrap();
+                        self.vm_coredump(&coredump_request)
+                            .map_err(Error::VmCoredump)?;
+                        self.vm_reboot().map_err(Error::VmReboot)?;
+                    }
+                    #[cfg(feature = "guest_debug")]
                     EpollDispatch::Debug => {
                         // Consume the events.
                         for _ in 0..self.debug_evt.read().map_err(Error::EventFdRead)? {
@@ -1523,6 +1569,8 @@ impl RequestHandler for Vmm {
                 let exit_evt = self.exit_evt.try_clone().map_err(VmError::EventFdClone)?;
                 let reset_evt = self.reset_evt.try_clone().map_err(VmError::EventFdClone)?;
                 #[cfg(feature = "guest_debug")]
+                let pause_evt = self.pause_evt.try_clone().map_err(VmError::EventFdClone)?;
+                #[cfg(feature = "guest_debug")]
                 let vm_debug_evt = self
                     .vm_debug_evt
                     .try_clone()
@@ -1537,6 +1585,8 @@ impl RequestHandler for Vmm {
                         Arc::clone(vm_config),
                         exit_evt,
                         reset_evt,
+                        #[cfg(feature = "guest_debug")]
+                        pause_evt,
                         #[cfg(feature = "guest_debug")]
                         vm_debug_evt,
                         &self.seccomp_action,
@@ -1689,6 +1739,8 @@ impl RequestHandler for Vmm {
         let exit_evt = self.exit_evt.try_clone().map_err(VmError::EventFdClone)?;
         let reset_evt = self.reset_evt.try_clone().map_err(VmError::EventFdClone)?;
         #[cfg(feature = "guest_debug")]
+        let pause_evt = self.pause_evt.try_clone().map_err(VmError::EventFdClone)?;
+        #[cfg(feature = "guest_debug")]
         let debug_evt = self
             .vm_debug_evt
             .try_clone()
@@ -1713,6 +1765,8 @@ impl RequestHandler for Vmm {
             config,
             exit_evt,
             reset_evt,
+            #[cfg(feature = "guest_debug")]
+            pause_evt,
             #[cfg(feature = "guest_debug")]
             debug_evt,
             &self.seccomp_action,
@@ -2350,6 +2404,8 @@ mod unit_tests {
             EventFd::new(EFD_NONBLOCK).unwrap(),
             SeccompAction::Allow,
             hypervisor::new().unwrap(),
+            EventFd::new(EFD_NONBLOCK).unwrap(),
+            #[cfg(feature = "guest_debug")]
             EventFd::new(EFD_NONBLOCK).unwrap(),
         )
         .unwrap()
