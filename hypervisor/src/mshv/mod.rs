@@ -485,11 +485,13 @@ impl cpu::Vcpu for MshvVcpu {
             Ok(x) => match x.header.message_type {
                 hv_message_type_HVMSG_X64_HALT => {
                     debug!("HALT");
-                    Ok(cpu::VmExit::Reset)
+                    // Ok(cpu::VmExit::Reset)
+                    Ok(cpu::VmExit::Pause)
                 }
                 hv_message_type_HVMSG_UNRECOVERABLE_EXCEPTION => {
                     warn!("TRIPLE FAULT");
-                    Ok(cpu::VmExit::Shutdown)
+                    // Ok(cpu::VmExit::Shutdown)
+                    Ok(cpu::VmExit::Pause)
                 }
                 hv_message_type_HVMSG_X64_IO_PORT_INTERCEPT => {
                     let info = x.to_ioport_info().unwrap();

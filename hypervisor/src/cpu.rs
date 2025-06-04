@@ -298,6 +298,7 @@ pub enum VmExit<'a> {
     Tdx,
     #[cfg(feature = "kvm")]
     Debug,
+    Pause,
 }
 
 ///
