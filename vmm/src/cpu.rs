@@ -488,6 +488,8 @@ pub struct CpuManager {
     #[cfg_attr(target_arch = "aarch64", allow(dead_code))]
     reset_evt: EventFd,
     #[cfg(feature = "guest_debug")]
+    pause_evt: EventFd,
+    #[cfg(feature = "guest_debug")]
     vm_debug_evt: EventFd,
     vcpu_states: Vec<VcpuState>,
     selected_cpu: u8,
@@ -644,6 +646,7 @@ impl CpuManager {
         vm: Arc<dyn hypervisor::Vm>,
         exit_evt: EventFd,
         reset_evt: EventFd,
+        #[cfg(feature = "guest_debug")] pause_evt: EventFd,
         #[cfg(feature = "guest_debug")] vm_debug_evt: EventFd,
         hypervisor: &Arc<dyn hypervisor::Hypervisor>,
         seccomp_action: SeccompAction,
@@ -732,6 +735,8 @@ impl CpuManager {
             vcpu_states,
             exit_evt,
             reset_evt,
+            #[cfg(feature = "guest_debug")]
+            pause_evt,
             #[cfg(feature = "guest_debug")]
             vm_debug_evt,
             selected_cpu: 0,
@@ -932,6 +937,8 @@ impl CpuManager {
         #[cfg(feature = "kvm")]
         let hypervisor_type = self.hypervisor.hypervisor_type();
         #[cfg(feature = "guest_debug")]
+        let pause_evt = self.pause_evt.try_clone().unwrap();
+        #[cfg(feature = "guest_debug")]
         let vm_debug_evt = self.vm_debug_evt.try_clone().unwrap();
         let panic_exit_evt = self.exit_evt.try_clone().unwrap();
         let vcpu_kill_signalled = self.vcpus_kill_signalled.clone();
@@ -1121,6 +1128,13 @@ impl CpuManager {
                                         info!("VmExit::Shutdown");
                                         vcpu_run_interrupted.store(true, Ordering::SeqCst);
                                         exit_evt.write(1).unwrap();
+                                        break;
+                                    }
+                                    #[cfg(feature = "guest_debug")]
+                                    VmExit::Pause => {
+                                        info!("VmExit::Pause");
+                                        vcpu_run_interrupted.store(true, Ordering::SeqCst);
+                                        pause_evt.write(1).unwrap();
                                         break;
                                     }
                                     #[cfg(feature = "tdx")]

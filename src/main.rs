@@ -38,6 +38,9 @@ enum Error {
     #[cfg(feature = "guest_debug")]
     #[error("Failed to create Debug EventFd: {0}")]
     CreateDebugEventFd(#[source] std::io::Error),
+    #[cfg(feature = "guest_debug")]
+    #[error("Failed to create Pause EventFd: {0}")]
+    CreatePauseEventFd(#[source] std::io::Error),
     #[error("Failed to create exit EventFd: {0}")]
     CreateExitEventFd(#[source] std::io::Error),
     #[error("Failed to open hypervisor interface (is hypervisor interface available?): {0}")]
@@ -665,7 +668,8 @@ fn start_vmm(cmd_arguments: ArgMatches) -> Result<Option<String>, Error> {
     let debug_evt = EventFd::new(EFD_NONBLOCK).map_err(Error::CreateDebugEventFd)?;
     #[cfg(feature = "guest_debug")]
     let vm_debug_evt = EventFd::new(EFD_NONBLOCK).map_err(Error::CreateDebugEventFd)?;
-
+    #[cfg(feature = "guest_debug")]
+    let pause_evt = EventFd::new(EFD_NONBLOCK).map_err(Error::CreatePauseEventFd)?;
     let exit_evt = EventFd::new(EFD_NONBLOCK).map_err(Error::CreateExitEventFd)?;
     let landlock_enable = cmd_arguments.get_flag("landlock");
 
@@ -761,6 +765,8 @@ fn start_vmm(cmd_arguments: ArgMatches) -> Result<Option<String>, Error> {
         debug_evt.try_clone().unwrap(),
         #[cfg(feature = "guest_debug")]
         vm_debug_evt.try_clone().unwrap(),
+        #[cfg(feature = "guest_debug")]
+        pause_evt.try_clone().unwrap(),
         exit_evt.try_clone().unwrap(),
         &seccomp_action,
         hypervisor,

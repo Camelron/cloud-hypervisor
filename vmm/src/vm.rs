@@ -489,6 +489,7 @@ impl Vm {
         vm: Arc<dyn hypervisor::Vm>,
         exit_evt: EventFd,
         reset_evt: EventFd,
+        #[cfg(feature = "guest_debug")] pause_evt: EventFd,
         #[cfg(feature = "guest_debug")] vm_debug_evt: EventFd,
         seccomp_action: &SeccompAction,
         hypervisor: Arc<dyn hypervisor::Hypervisor>,
@@ -555,6 +556,8 @@ impl Vm {
             vm.clone(),
             exit_evt.try_clone().map_err(Error::EventFdClone)?,
             reset_evt.try_clone().map_err(Error::EventFdClone)?,
+            #[cfg(feature = "guest_debug")]
+            pause_evt.try_clone().map_err(Error::EventFdClone)?,
             #[cfg(feature = "guest_debug")]
             vm_debug_evt,
             &hypervisor,
@@ -802,6 +805,7 @@ impl Vm {
         vm_config: Arc<Mutex<VmConfig>>,
         exit_evt: EventFd,
         reset_evt: EventFd,
+        #[cfg(feature = "guest_debug")] pause_evt: EventFd,
         #[cfg(feature = "guest_debug")] vm_debug_evt: EventFd,
         seccomp_action: &SeccompAction,
         hypervisor: Arc<dyn hypervisor::Hypervisor>,
@@ -880,6 +884,8 @@ impl Vm {
             vm,
             exit_evt,
             reset_evt,
+            #[cfg(feature = "guest_debug")]
+            pause_evt,
             #[cfg(feature = "guest_debug")]
             vm_debug_evt,
             seccomp_action,
