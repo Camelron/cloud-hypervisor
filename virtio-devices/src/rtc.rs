@@ -24,17 +24,15 @@ use seccompiler::SeccompAction;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use virtio_queue::{Queue, QueueT};
-use vm_memory::{
-    ByteValued, Bytes, GuestAddressSpace, GuestMemory, GuestMemoryAtomic, Le16, Le32, Le64,
-};
+use vm_memory::{ByteValued, Bytes, GuestAddressSpace, GuestMemoryAtomic, Le16, Le32, Le64};
 use vm_migration::{Migratable, MigratableError, Pausable, Snapshot, Snapshottable, Transportable};
 use vm_virtio::{AccessPlatform, Translatable};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::{
-    ActivateError, ActivateResult, EPOLL_HELPER_EVENT_LAST, EpollHelper, EpollHelperError,
-    EpollHelperHandler, Error as DeviceError, VIRTIO_F_IOMMU_PLATFORM, VIRTIO_F_VERSION_1,
-    VirtioCommon, VirtioDevice, VirtioDeviceType,
+    ActivateResult, EPOLL_HELPER_EVENT_LAST, EpollHelper, EpollHelperError, EpollHelperHandler,
+    Error as DeviceError, VIRTIO_F_IOMMU_PLATFORM, VIRTIO_F_VERSION_1, VirtioCommon, VirtioDevice,
+    VirtioDeviceType,
 };
 use crate::seccomp_filters::Thread;
 use crate::thread_helper::spawn_virtio_thread;
@@ -200,7 +198,7 @@ impl RtcEpollHandler {
                 .map_err(Error::GuestMemoryRead)?;
 
             // ── 2. Build the response ─────────────────────────────────────
-            let resp = self.handle_request(&req);
+            let resp = handle_request(&req);
 
             // ── 3. Write to the device-writable response descriptor ───────
             let resp_desc = desc_chain.next().ok_or(Error::DescriptorChainTooShort)?;
@@ -231,50 +229,6 @@ impl RtcEpollHandler {
         Ok(used_descs)
     }
 
-    /// Dispatch a single request and return the appropriate response.
-    fn handle_request(&self, req: &VirtioRtcReqReadClock) -> VirtioRtcRespReadClock {
-        let msg_type: u16 = req.msg_type.into();
-        let clock_id: u16 = req.clock_id.into();
-
-        if msg_type != VIRTIO_RTC_REQ_READ_CLOCK {
-            warn!("virtio-rtc: unsupported request type {msg_type}");
-            return VirtioRtcRespReadClock {
-                clock_ns: Le64::from(0u64),
-                status: VIRTIO_RTC_S_UNSUPP,
-                _padding: [0u8; 7],
-            };
-        }
-
-        let clockid = match clock_id {
-            VIRTIO_RTC_CLOCK_UTC => libc::CLOCK_REALTIME,
-            VIRTIO_RTC_CLOCK_MONOTONIC => libc::CLOCK_MONOTONIC,
-            _ => {
-                warn!("virtio-rtc: unsupported clock_id {clock_id}");
-                return VirtioRtcRespReadClock {
-                    clock_ns: Le64::from(0u64),
-                    status: VIRTIO_RTC_S_UNSUPP,
-                    _padding: [0u8; 7],
-                };
-            }
-        };
-
-        match clock_gettime_ns(clockid) {
-            Ok(ns) => VirtioRtcRespReadClock {
-                clock_ns: Le64::from(ns),
-                status: VIRTIO_RTC_S_OK,
-                _padding: [0u8; 7],
-            },
-            Err(()) => {
-                error!("virtio-rtc: clock_gettime failed for clock_id {clock_id}");
-                VirtioRtcRespReadClock {
-                    clock_ns: Le64::from(0u64),
-                    status: VIRTIO_RTC_S_IOERR,
-                    _padding: [0u8; 7],
-                }
-            }
-        }
-    }
-
     fn signal_used_queue(&self) -> Result<(), DeviceError> {
         self.interrupt_cb
             .trigger(VirtioInterruptType::Queue(0))
@@ -293,6 +247,50 @@ impl RtcEpollHandler {
         helper.add_event(self.queue_evt.as_raw_fd(), QUEUE_AVAIL_EVENT)?;
         helper.run(paused, paused_sync, self)?;
         Ok(())
+    }
+}
+
+/// Dispatch a single request and return the appropriate response.
+fn handle_request(req: &VirtioRtcReqReadClock) -> VirtioRtcRespReadClock {
+    let msg_type: u16 = req.msg_type.into();
+    let clock_id: u16 = req.clock_id.into();
+
+    if msg_type != VIRTIO_RTC_REQ_READ_CLOCK {
+        warn!("virtio-rtc: unsupported request type {msg_type}");
+        return VirtioRtcRespReadClock {
+            clock_ns: Le64::from(0u64),
+            status: VIRTIO_RTC_S_UNSUPP,
+            _padding: [0u8; 7],
+        };
+    }
+
+    let clockid = match clock_id {
+        VIRTIO_RTC_CLOCK_UTC => libc::CLOCK_REALTIME,
+        VIRTIO_RTC_CLOCK_MONOTONIC => libc::CLOCK_MONOTONIC,
+        _ => {
+            warn!("virtio-rtc: unsupported clock_id {clock_id}");
+            return VirtioRtcRespReadClock {
+                clock_ns: Le64::from(0u64),
+                status: VIRTIO_RTC_S_UNSUPP,
+                _padding: [0u8; 7],
+            };
+        }
+    };
+
+    match clock_gettime_ns(clockid) {
+        Ok(ns) => VirtioRtcRespReadClock {
+            clock_ns: Le64::from(ns),
+            status: VIRTIO_RTC_S_OK,
+            _padding: [0u8; 7],
+        },
+        Err(()) => {
+            error!("virtio-rtc: clock_gettime failed for clock_id {clock_id}");
+            VirtioRtcRespReadClock {
+                clock_ns: Le64::from(0u64),
+                status: VIRTIO_RTC_S_IOERR,
+                _padding: [0u8; 7],
+            }
+        }
     }
 }
 
