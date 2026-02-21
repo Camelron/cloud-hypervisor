@@ -753,8 +753,13 @@ pub fn generate_common_cpuid(
             function: 0x4000_0003,
             eax: (1 << 1) // AccessPartitionReferenceCounter
                    | (1 << 2) // AccessSynicRegs
-                   | (1 << 3) // AccessSyntheticTimerRegs
-                   | (1 << 9), // AccessPartitionReferenceTsc
+                   | (1 << 3), // AccessSyntheticTimerRegs
+            // NOTE: We intentionally do NOT set bit 9 (AccessPartitionReferenceTsc).
+            // The Hyper-V TSC page enlightenment installs hyperv_clocksource_tsc_page
+            // in the guest, which prevents the raw TSC clocksource from being used.
+            // Without raw TSC, virtio-rtc cross-timestamping (VIRTIO_RTC_REQ_READ_CROSS)
+            // cannot function — the PTP driver's getcrosststamp path requires
+            // CSID_X86_TSC. Omitting this bit lets the guest fall back to raw TSC.
             edx: 1 << 3, // CPU dynamic partitioning
             ..Default::default()
         });
