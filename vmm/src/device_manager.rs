@@ -138,6 +138,7 @@ const DEBUGCON_DEVICE_NAME: &str = "__debug_console";
 #[cfg(target_arch = "aarch64")]
 const GPIO_DEVICE_NAME: &str = "__gpio";
 const RNG_DEVICE_NAME: &str = "__rng";
+const RTC_DEVICE_NAME: &str = "__virtio_rtc";
 const IOMMU_DEVICE_NAME: &str = "__iommu";
 #[cfg(feature = "pvmemcontrol")]
 const PVMEMCONTROL_DEVICE_NAME: &str = "__pvmemcontrol";
@@ -190,6 +191,10 @@ pub enum DeviceManagerError {
     /// Cannot create virtio-rng device
     #[error("Cannot create virtio-rng device")]
     CreateVirtioRng(#[source] io::Error),
+
+    /// Cannot create virtio-rtc device
+    #[error("Cannot create virtio-rtc device")]
+    CreateVirtioRtc(#[source] io::Error),
 
     /// Cannot create virtio-fs device
     #[error("Cannot create virtio-fs device")]
@@ -2582,6 +2587,7 @@ impl DeviceManager {
         devices.append(&mut self.make_virtio_block_devices()?);
         devices.append(&mut self.make_virtio_net_devices()?);
         devices.append(&mut self.make_virtio_rng_devices()?);
+        devices.append(&mut self.make_virtio_rtc_devices()?);
 
         // Add virtio-fs if required
         devices.append(&mut self.make_virtio_fs_devices()?);
@@ -3099,6 +3105,43 @@ impl DeviceManager {
                 .unwrap()
                 .insert(id.clone(), device_node!(id, virtio_rng_device));
         }
+
+        Ok(devices)
+    }
+
+    fn make_virtio_rtc_devices(&mut self) -> DeviceManagerResult<Vec<MetaVirtioDevice>> {
+        let mut devices = Vec::new();
+
+        info!("Creating virtio-rtc device");
+        let id = String::from(RTC_DEVICE_NAME);
+
+        let virtio_rtc_device = Arc::new(Mutex::new(
+            virtio_devices::Rtc::new(
+                id.clone(),
+                self.force_iommu,
+                self.seccomp_action.clone(),
+                self.exit_evt
+                    .try_clone()
+                    .map_err(DeviceManagerError::EventFd)?,
+                state_from_id(self.snapshot.as_ref(), id.as_str())
+                    .map_err(DeviceManagerError::RestoreGetState)?,
+            )
+            .map_err(DeviceManagerError::CreateVirtioRtc)?,
+        ));
+
+        devices.push(MetaVirtioDevice {
+            virtio_device: Arc::clone(&virtio_rtc_device)
+                as Arc<Mutex<dyn virtio_devices::VirtioDevice>>,
+            iommu: self.force_iommu,
+            id: id.clone(),
+            pci_segment: 0,
+            dma_handler: None,
+        });
+
+        self.device_tree
+            .lock()
+            .unwrap()
+            .insert(id.clone(), device_node!(id, virtio_rtc_device));
 
         Ok(devices)
     }
