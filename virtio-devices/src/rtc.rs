@@ -198,7 +198,7 @@ impl RtcEpollHandler {
         let mut used_descs = false;
 
         while let Some(mut desc_chain) = self.queue.pop_descriptor_chain(self.mem.memory()) {
-            let access_platform = self.access_platform.as_deref();
+            let access_platform = self.access_platform.as_ref();
 
             // Process the descriptor chain and prepare the response.
             // If processing fails, we still need to add a used descriptor with a response indicating the error.
@@ -222,7 +222,7 @@ impl RtcEpollHandler {
     }
 
     fn process_descriptor<M>(
-        access_platform: Option<&dyn AccessPlatform>,
+        access_platform: Option<&Arc<dyn AccessPlatform>>,
         desc_chain: &mut virtio_queue::DescriptorChain<M>,
     ) -> Result<u32, Error>
     where
@@ -476,8 +476,8 @@ impl RtcEpollHandler {
 
     fn run(
         &mut self,
-        paused: &AtomicBool,
-        paused_sync: &Barrier,
+        paused: Arc<AtomicBool>,
+        paused_sync: Arc<Barrier>,
     ) -> result::Result<(), EpollHelperError> {
         let mut helper = EpollHelper::new(&self.kill_evt, &self.pause_evt)?;
         helper.add_event(self.queue_evt.as_raw_fd(), QUEUE_AVAIL_EVENT)?;
@@ -617,7 +617,7 @@ impl VirtioDevice for Rtc {
         interrupt_cb: Arc<dyn VirtioInterrupt>,
         mut queues: Vec<(usize, Queue, EventFd)>,
     ) -> ActivateResult {
-        self.common.activate(&queues, interrupt_cb.clone())?;
+        self.common.activate(&queues, &interrupt_cb)?;
         let (kill_evt, pause_evt) = self.common.dup_eventfds();
 
         let (_, queue, queue_evt) = queues.remove(0);
@@ -641,7 +641,7 @@ impl VirtioDevice for Rtc {
             Thread::VirtioRtc,
             &mut epoll_threads,
             &self.exit_evt,
-            move || handler.run(&paused, paused_sync.as_ref().unwrap()),
+            move || handler.run(paused, paused_sync.unwrap()),
         )?;
 
         self.common.epoll_threads = Some(epoll_threads);
