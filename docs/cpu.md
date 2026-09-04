@@ -13,6 +13,7 @@ to set vCPUs options for Cloud Hypervisor.
 struct CpusConfig {
     boot_vcpus: u32,
     max_vcpus: u32,
+  model: Option<CpuModel>,
     topology: Option<CpuTopology>,
     kvm_hyperv: bool,
     max_phys_bits: u8,
@@ -24,7 +25,7 @@ struct CpusConfig {
 ```
 
 ```
---cpus boot=<boot_vcpus>,max=<max_vcpus>,topology=<threads_per_core>:<cores_per_die>:<dies_per_package>:<packages>,kvm_hyperv=on|off,max_phys_bits=<maximum_number_of_physical_bits>,affinity=<list_of_vcpus_with_their_associated_cpuset>,features=<list_of_features_to_enable>,nested=on|off,core_scheduling=vm|vcpu|off
+--cpus boot=<boot_vcpus>,max=<max_vcpus>,model=<named_cpu_model>,topology=<threads_per_core>:<cores_per_die>:<dies_per_package>:<packages>,kvm_hyperv=on|off,max_phys_bits=<maximum_number_of_physical_bits>,affinity=<list_of_vcpus_with_their_associated_cpuset>,features=<list_of_features_to_enable>,nested=on|off,core_scheduling=vm|vcpu|off
 ```
 
 ### `boot`
@@ -65,6 +66,65 @@ _Example_
 
 ```
 --cpus max=3
+```
+
+### `model`
+
+Named CPU model exposed to the guest on x86-64. A named model presents a
+stable CPU identity and feature set instead of passing through every feature
+available on the host. This is intended for snapshots and live migration
+between hosts with different processor generations.
+
+The supported Intel models are:
+
+- `Skylake-Server`
+- `Skylake-Server-IBRS`
+- `Skylake-Server-noTSX-IBRS`
+- `Cascadelake-Server`
+- `Cascadelake-Server-noTSX`
+- `Icelake-Server`
+- `Icelake-Server-noTSX`
+
+The supported AMD models are:
+
+- `EPYC`
+- `EPYC-Rome`
+- `EPYC-Milan`
+
+The names and architectural feature sets are based on the corresponding
+libvirt CPU maps for QEMU models. They are Cloud Hypervisor profiles and are
+not guaranteed to be bit-for-bit compatible with a QEMU model of the same
+unversioned name.
+The selected model must match the host CPU vendor, and the host must support
+every feature required by the model. VM creation fails if either check fails.
+Both KVM and MSHV restrict guest CPUID to the selected model. MSHV also
+restricts its partition processor and XSAVE feature banks so instructions
+hidden by the model are not enabled for the partition.
+
+For migration, configure the same model on every source VM. The model is
+stored in the VM configuration used by snapshot/restore. Select the oldest
+model required by the workload and supported by every destination node. The
+`noTSX` variants are useful when TSX is disabled on some hosts. Intel models
+cannot migrate to AMD hosts, or vice versa.
+
+Named models cannot be combined with `features=amx`.
+
+_CLI example_
+
+```
+--cpus boot=2,model=Skylake-Server-noTSX-IBRS
+```
+
+_API example_
+
+```json
+{
+  "cpus": {
+    "boot_vcpus": 2,
+    "max_vcpus": 2,
+    "model": "Skylake-Server-noTSX-IBRS"
+  }
+}
 ```
 
 ### `topology`

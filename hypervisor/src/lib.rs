@@ -45,6 +45,10 @@ mod cpu;
 /// Device related module
 mod device;
 
+#[cfg(target_arch = "x86_64")]
+use std::fmt;
+#[cfg(target_arch = "x86_64")]
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::anyhow;
@@ -70,6 +74,97 @@ pub enum HypervisorType {
     Kvm,
     #[cfg(feature = "mshv")]
     Mshv,
+}
+
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+/// A stable x86-64 CPU identity and architectural feature profile.
+pub enum CpuModel {
+    /// Intel Skylake server profile.
+    #[serde(rename = "Skylake-Server")]
+    SkylakeServer,
+    /// Intel Skylake server profile with IBRS.
+    #[serde(rename = "Skylake-Server-IBRS")]
+    SkylakeServerIbrs,
+    /// Intel Skylake server profile with IBRS and TSX disabled.
+    #[serde(rename = "Skylake-Server-noTSX-IBRS")]
+    SkylakeServerNoTsxIbrs,
+    /// Intel Cascade Lake server profile.
+    #[serde(rename = "Cascadelake-Server")]
+    CascadelakeServer,
+    /// Intel Cascade Lake server profile with TSX disabled.
+    #[serde(rename = "Cascadelake-Server-noTSX")]
+    CascadelakeServerNoTsx,
+    /// Intel Ice Lake server profile.
+    #[serde(rename = "Icelake-Server")]
+    IcelakeServer,
+    /// Intel Ice Lake server profile with TSX disabled.
+    #[serde(rename = "Icelake-Server-noTSX")]
+    IcelakeServerNoTsx,
+    /// First-generation AMD EPYC (Naples) profile.
+    #[serde(rename = "EPYC")]
+    Epyc,
+    /// Second-generation AMD EPYC (Rome) profile.
+    #[serde(rename = "EPYC-Rome")]
+    EpycRome,
+    /// Third-generation AMD EPYC (Milan) profile.
+    #[serde(rename = "EPYC-Milan")]
+    EpycMilan,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl fmt::Display for CpuModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            CpuModel::SkylakeServer => "Skylake-Server",
+            CpuModel::SkylakeServerIbrs => "Skylake-Server-IBRS",
+            CpuModel::SkylakeServerNoTsxIbrs => "Skylake-Server-noTSX-IBRS",
+            CpuModel::CascadelakeServer => "Cascadelake-Server",
+            CpuModel::CascadelakeServerNoTsx => "Cascadelake-Server-noTSX",
+            CpuModel::IcelakeServer => "Icelake-Server",
+            CpuModel::IcelakeServerNoTsx => "Icelake-Server-noTSX",
+            CpuModel::Epyc => "EPYC",
+            CpuModel::EpycRome => "EPYC-Rome",
+            CpuModel::EpycMilan => "EPYC-Milan",
+        })
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl CpuModel {
+    pub fn vendor(self) -> CpuVendor {
+        match self {
+            CpuModel::SkylakeServer
+            | CpuModel::SkylakeServerIbrs
+            | CpuModel::SkylakeServerNoTsxIbrs
+            | CpuModel::CascadelakeServer
+            | CpuModel::CascadelakeServerNoTsx
+            | CpuModel::IcelakeServer
+            | CpuModel::IcelakeServerNoTsx => CpuVendor::Intel,
+            CpuModel::Epyc | CpuModel::EpycRome | CpuModel::EpycMilan => CpuVendor::AMD,
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl FromStr for CpuModel {
+    type Err = String;
+
+    fn from_str(model: &str) -> Result<Self, Self::Err> {
+        match model {
+            "Skylake-Server" => Ok(CpuModel::SkylakeServer),
+            "Skylake-Server-IBRS" => Ok(CpuModel::SkylakeServerIbrs),
+            "Skylake-Server-noTSX-IBRS" => Ok(CpuModel::SkylakeServerNoTsxIbrs),
+            "Cascadelake-Server" => Ok(CpuModel::CascadelakeServer),
+            "Cascadelake-Server-noTSX" => Ok(CpuModel::CascadelakeServerNoTsx),
+            "Icelake-Server" => Ok(CpuModel::IcelakeServer),
+            "Icelake-Server-noTSX" => Ok(CpuModel::IcelakeServerNoTsx),
+            "EPYC" => Ok(CpuModel::Epyc),
+            "EPYC-Rome" => Ok(CpuModel::EpycRome),
+            "EPYC-Milan" => Ok(CpuModel::EpycMilan),
+            _ => Err(format!("unknown CPU model: {model}")),
+        }
+    }
 }
 
 pub fn new() -> std::result::Result<Arc<dyn Hypervisor>, HypervisorError> {
@@ -194,6 +289,8 @@ pub struct HypervisorVmConfig {
     pub vmsa_features: u64,
     pub nested: bool,
     pub smt_enabled: bool,
+    #[cfg(target_arch = "x86_64")]
+    pub cpu_model: Option<CpuModel>,
 }
 
 #[derive(Copy, Clone)]

@@ -72,6 +72,10 @@ pub fn default_cpuconfig_max_phys_bits() -> u8 {
 pub struct CpusConfig {
     pub boot_vcpus: u32,
     pub max_vcpus: u32,
+    #[cfg(target_arch = "x86_64")]
+    /// Stable CPU profile exposed to the guest instead of host passthrough.
+    #[serde(default)]
+    pub model: Option<hypervisor::CpuModel>,
     #[serde(default)]
     pub topology: Option<CpuTopology>,
     #[serde(default)]
@@ -95,6 +99,8 @@ impl Default for CpusConfig {
         CpusConfig {
             boot_vcpus: DEFAULT_VCPUS,
             max_vcpus: DEFAULT_VCPUS,
+            #[cfg(target_arch = "x86_64")]
+            model: None,
             topology: None,
             kvm_hyperv: false,
             max_phys_bits: DEFAULT_MAX_PHYS_BITS,

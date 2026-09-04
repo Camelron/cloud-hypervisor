@@ -1661,7 +1661,10 @@ impl hypervisor::Hypervisor for KvmHypervisor {
     ///
     /// X86 specific call to get the system supported CPUID values.
     ///
-    fn get_supported_cpuid(&self) -> hypervisor::Result<Vec<CpuIdEntry>> {
+    fn get_supported_cpuid(
+        &self,
+        _cpu_model: Option<crate::CpuModel>,
+    ) -> hypervisor::Result<Vec<CpuIdEntry>> {
         let kvm_cpuid = self
             .kvm
             .get_supported_cpuid(kvm_bindings::KVM_MAX_CPUID_ENTRIES)

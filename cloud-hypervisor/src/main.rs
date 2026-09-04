@@ -141,6 +141,23 @@ fn default_rng() -> String {
     format!("src={}", RngConfig::DEFAULT_RNG_SOURCE)
 }
 
+#[cfg(target_arch = "x86_64")]
+const CPUS_SYNTAX: &str = "boot=<boot_vcpus>,max=<max_vcpus>,\
+    topology=<threads_per_core>:<cores_per_die>:<dies_per_package>:<packages>,\
+    model=<named_cpu_model>,kvm_hyperv=on|off,\
+    max_phys_bits=<maximum_number_of_physical_bits>,\
+    affinity=<list_of_vcpus_with_their_associated_cpuset>,\
+    features=<list_of_features_to_enable>,\
+    nested=on|off,core_scheduling=vm|vcpu|off";
+
+#[cfg(not(target_arch = "x86_64"))]
+const CPUS_SYNTAX: &str = "boot=<boot_vcpus>,max=<max_vcpus>,\
+    topology=<threads_per_core>:<cores_per_die>:<dies_per_package>:<packages>,\
+    kvm_hyperv=on|off,max_phys_bits=<maximum_number_of_physical_bits>,\
+    affinity=<list_of_vcpus_with_their_associated_cpuset>,\
+    features=<list_of_features_to_enable>,\
+    nested=on|off,core_scheduling=vm|vcpu|off";
+
 /// Returns all [`Arg`]s in alphabetical order. This is the order used in the
 /// `--help` output.
 fn get_cli_options_sorted(
@@ -171,14 +188,7 @@ fn get_cli_options_sorted(
             .group("vm-config"),
         Arg::new("cpus")
             .long("cpus")
-            .help(
-                "boot=<boot_vcpus>,max=<max_vcpus>,\
-                    topology=<threads_per_core>:<cores_per_die>:<dies_per_package>:<packages>,\
-                    kvm_hyperv=on|off,max_phys_bits=<maximum_number_of_physical_bits>,\
-                    affinity=<list_of_vcpus_with_their_associated_cpuset>,\
-                    features=<list_of_features_to_enable>,\
-                    nested=on|off,core_scheduling=vm|vcpu|off",
-            )
+            .help(CPUS_SYNTAX)
             .default_value(default_vcpus)
             .group("vm-config"),
         #[cfg(feature = "dbus_api")]
@@ -968,6 +978,8 @@ mod unit_tests {
             cpus: CpusConfig {
                 boot_vcpus: 1,
                 max_vcpus: 1,
+                #[cfg(target_arch = "x86_64")]
+                model: None,
                 topology: None,
                 kvm_hyperv: false,
                 max_phys_bits: 46,
@@ -1104,6 +1116,28 @@ mod unit_tests {
         .for_each(|(cli, openapi, equal)| {
             compare_vm_config_cli_vs_json(cli, openapi, *equal);
         });
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_valid_vm_config_cpu_model() {
+        let cli = vec![
+            "cloud-hypervisor",
+            "--kernel",
+            "/path/to/kernel",
+            "--cpus",
+            "boot=1,model=Skylake-Server-noTSX-IBRS",
+        ];
+        let openapi = r#"{
+            "payload": {"kernel": "/path/to/kernel"},
+            "cpus": {
+                "boot_vcpus": 1,
+                "max_vcpus": 1,
+                "model": "Skylake-Server-noTSX-IBRS"
+            }
+        }"#;
+
+        compare_vm_config_cli_vs_json(&cli, openapi, true);
     }
 
     #[test]

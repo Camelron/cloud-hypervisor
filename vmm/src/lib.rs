@@ -249,6 +249,8 @@ impl From<&VmConfig> for hypervisor::HypervisorVmConfig {
                 .topology
                 .as_ref()
                 .is_some_and(|t| t.threads_per_core > 1),
+            #[cfg(target_arch = "x86_64")]
+            cpu_model: _value.cpus.model,
         }
     }
 }
@@ -1435,6 +1437,8 @@ impl Vmm {
                     #[cfg(feature = "tdx")]
                     tdx: false,
                     amx,
+                    cpu_model: vm_config.lock().unwrap().cpus.model,
+                    nested: vm_config.lock().unwrap().cpus.nested,
                 },
             )
             .map_err(|e| {
@@ -1580,6 +1584,8 @@ impl Vmm {
                     #[cfg(feature = "tdx")]
                     tdx: false,
                     amx: vm_config.cpus.features.amx,
+                    cpu_model: vm_config.cpus.model,
+                    nested: vm_config.cpus.nested,
                 },
             )
             .map_err(|e| {
@@ -2679,6 +2685,8 @@ mod unit_tests {
             cpus: CpusConfig {
                 boot_vcpus: 1,
                 max_vcpus: 1,
+                #[cfg(target_arch = "x86_64")]
+                model: None,
                 topology: None,
                 kvm_hyperv: false,
                 max_phys_bits: 46,

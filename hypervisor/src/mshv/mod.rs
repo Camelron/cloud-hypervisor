@@ -80,10 +80,155 @@ use crate::arch::aarch64::gic::{Vgic, VgicConfig};
 #[cfg(target_arch = "aarch64")]
 use crate::arch::aarch64::regs;
 #[cfg(target_arch = "x86_64")]
-use crate::arch::x86::{CpuIdEntry, FpuState, MsrEntry};
+use crate::arch::x86::{
+    CPUID_FLAG_EXACT_EAX, CPUID_FLAG_EXACT_EBX, CPUID_FLAG_EXACT_ECX, CPUID_FLAG_EXACT_EDX,
+    CPUID_FLAG_VALID_INDEX, CpuIdEntry, FpuState, MsrEntry,
+};
 use crate::{CpuState, IoEventAddress, IrqRoutingEntry, MpState};
 
 pub const PAGE_SHIFT: usize = 12;
+
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Copy)]
+// MSHV uses inverted partition feature banks in addition to guest CPUID.
+// This table enforces the profiles defined in arch/src/x86_64/cpu_model.rs at
+// the partition boundary so masked instructions and XSAVE state are disabled.
+struct CpuModelFeatures {
+    processor: [u64; 2],
+    processor_controlled: [u64; 2],
+    xsave: u64,
+    xsave_controlled: u64,
+}
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_model_features(model: crate::CpuModel) -> CpuModelFeatures {
+    macro_rules! bits {
+        ($($bit:expr),* $(,)?) => {
+            0_u64 $(| (1_u64 << $bit))*
+        };
+    }
+
+    let processor_controlled = [
+        (bits!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+            | bits!(16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)
+            | bits!(
+                31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46
+            )
+            | bits!(49, 56, 57, 58)),
+        bits!(2, 3, 4, 8, 9, 11, 12, 13, 14, 15, 16, 22),
+    ];
+    let xsave_controlled = (1_u64 << 40) - 1;
+    let xsave_v3 = bits!(0, 1, 2, 3, 4, 11, 13);
+    let intel_processor = bits!(
+        0, 1, 2, 3, 4, 7, 8, 10, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 32, 33,
+        34, 35, 36, 37, 38, 40, 42, 43
+    );
+    let amd_processor = bits!(
+        0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 15, 16, 17, 20, 21, 22, 23, 25, 26, 29, 32, 33, 34,
+        35, 38, 39, 41, 42
+    );
+
+    let (processor, xsave) = match model {
+        crate::CpuModel::SkylakeServerIbrs => {
+            let mut features = cpu_model_features(crate::CpuModel::SkylakeServer);
+            features.processor[0] |= bits!(44, 46);
+            return features;
+        }
+        crate::CpuModel::SkylakeServerNoTsxIbrs => {
+            let mut features = cpu_model_features(crate::CpuModel::SkylakeServerIbrs);
+            features.processor[0] &= !bits!(27, 28, 36, 37);
+            return features;
+        }
+        crate::CpuModel::CascadelakeServerNoTsx => {
+            let mut features = cpu_model_features(crate::CpuModel::CascadelakeServer);
+            features.processor[0] &= !bits!(27, 28, 36, 37);
+            return features;
+        }
+        crate::CpuModel::IcelakeServerNoTsx => {
+            let mut features = cpu_model_features(crate::CpuModel::IcelakeServer);
+            features.processor[0] &= !bits!(27, 28, 36, 37);
+            return features;
+        }
+        crate::CpuModel::SkylakeServer => ([intel_processor, 0], xsave_v3 | bits!(6, 7, 8, 9, 10)),
+        crate::CpuModel::CascadelakeServer => (
+            [intel_processor | bits!(39, 44, 46, 56), 0],
+            xsave_v3 | bits!(6, 7, 8, 9, 10, 18),
+        ),
+        crate::CpuModel::IcelakeServer => (
+            [intel_processor | bits!(39, 44, 46, 56), bits!(4)],
+            xsave_v3 | bits!(6, 7, 8, 9, 10, 14, 16, 17, 18, 19, 20, 21, 22),
+        ),
+        crate::CpuModel::Epyc => ([amd_processor, 0], xsave_v3),
+        crate::CpuModel::EpycRome => (
+            [amd_processor | bits!(31, 40, 45, 46, 57, 58), bits!(2)],
+            xsave_v3,
+        ),
+        crate::CpuModel::EpycMilan => (
+            [
+                amd_processor | bits!(18, 24, 31, 40, 43, 44, 45, 46, 49, 56, 57, 58),
+                bits!(2),
+            ],
+            xsave_v3 | bits!(12),
+        ),
+    };
+
+    CpuModelFeatures {
+        processor,
+        processor_controlled,
+        xsave,
+        xsave_controlled,
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod cpu_model_tests {
+    use super::*;
+
+    const MODELS: [crate::CpuModel; 10] = [
+        crate::CpuModel::SkylakeServer,
+        crate::CpuModel::SkylakeServerIbrs,
+        crate::CpuModel::SkylakeServerNoTsxIbrs,
+        crate::CpuModel::CascadelakeServer,
+        crate::CpuModel::CascadelakeServerNoTsx,
+        crate::CpuModel::IcelakeServer,
+        crate::CpuModel::IcelakeServerNoTsx,
+        crate::CpuModel::Epyc,
+        crate::CpuModel::EpycRome,
+        crate::CpuModel::EpycMilan,
+    ];
+
+    #[test]
+    fn cpu_model_feature_masks_are_controlled() {
+        for model in MODELS {
+            let features = cpu_model_features(model);
+            assert_eq!(features.processor[0] & !features.processor_controlled[0], 0);
+            assert_eq!(features.processor[1] & !features.processor_controlled[1], 0);
+            assert_eq!(features.xsave & !features.xsave_controlled, 0);
+        }
+    }
+
+    #[test]
+    fn no_tsx_models_disable_all_tsx_partition_features() {
+        let tsx = (1_u64 << 27) | (1_u64 << 28) | (1_u64 << 36) | (1_u64 << 37);
+        for model in [
+            crate::CpuModel::SkylakeServerNoTsxIbrs,
+            crate::CpuModel::CascadelakeServerNoTsx,
+            crate::CpuModel::IcelakeServerNoTsx,
+        ] {
+            assert_eq!(cpu_model_features(model).processor[0] & tsx, 0);
+        }
+    }
+
+    #[test]
+    fn cpu_models_disable_amx_xsave_features() {
+        let amx = (1_u64 << 27) | (1_u64 << 28) | (1_u64 << 29) | (1_u64 << 38);
+        for model in MODELS {
+            let features = cpu_model_features(model);
+            assert_eq!(features.xsave & amx, 0);
+            assert_eq!(features.xsave_controlled & amx, amx);
+        }
+    }
+}
 
 // SVM exit codes not yet defined in mshv-bindings (AMD APM Vol 2, Table 15-7)
 #[cfg(feature = "sev_snp")]
@@ -311,6 +456,20 @@ impl hypervisor::Hypervisor for MshvHypervisor {
         }
 
         let mut create_args = self.mshv.make_default_partition_create_arg(mshv_vm_type);
+        #[cfg(target_arch = "x86_64")]
+        let model_features = if let Some(model) = _config.cpu_model {
+            let host_vendor = self.get_cpu_vendor();
+            if model.vendor() != host_vendor {
+                return Err(hypervisor::HypervisorError::UnsupportedCpu(anyhow!(
+                    "CPU model {model} requires a {:?} host, but this host is {:?}",
+                    model.vendor(),
+                    host_vendor
+                )));
+            }
+            Some((model, cpu_model_features(model)))
+        } else {
+            None
+        };
         let mut disable_proc_features = hv_partition_processor_features::default();
         // SAFETY: Accessing a union element from bindgen generated bindings.
         unsafe {
@@ -319,6 +478,20 @@ impl hypervisor::Hypervisor for MshvHypervisor {
             }
             #[cfg(target_arch = "x86_64")]
             {
+                if let Some((model, features)) = model_features {
+                    for bank in 0..create_args.pt_num_cpu_fbanks as usize {
+                        let unavailable =
+                            disable_proc_features.as_uint64[bank] & features.processor[bank];
+                        if unavailable != 0 {
+                            return Err(hypervisor::HypervisorError::UnsupportedCpu(anyhow!(
+                                "CPU model {model} requires unavailable MSHV processor features in bank {bank}: 0x{unavailable:016x}"
+                            )));
+                        }
+                        disable_proc_features.as_uint64[bank] |=
+                            features.processor_controlled[bank] & !features.processor[bank];
+                    }
+                }
+
                 // Modify create_args based on user configuration
                 // For now we only handle nested virtualization, but more features can be added here
                 if _config.nested {
@@ -340,6 +513,27 @@ impl hypervisor::Hypervisor for MshvHypervisor {
             for i in 0..create_args.pt_num_cpu_fbanks {
                 create_args.pt_cpu_fbanks[i as usize] = disable_proc_features.as_uint64[i as usize];
             }
+        }
+        #[cfg(target_arch = "x86_64")]
+        if let Some((model, features)) = model_features {
+            let host_xsave = self
+                .mshv
+                .get_host_partition_property(
+                    hv_partition_property_code_HV_PARTITION_PROPERTY_PROCESSOR_XSAVE_FEATURES,
+                )
+                .map_err(|e| {
+                    hypervisor::HypervisorError::UnsupportedCpu(anyhow!(
+                        "failed to query MSHV XSAVE features for CPU model {model}: {e}"
+                    ))
+                })?;
+            let unavailable = features.xsave & !host_xsave;
+            if unavailable != 0 {
+                return Err(hypervisor::HypervisorError::UnsupportedCpu(anyhow!(
+                    "CPU model {model} requires unavailable MSHV XSAVE features: 0x{unavailable:016x}"
+                )));
+            }
+            create_args.pt_disabled_xsave |= features.xsave_controlled & !features.xsave;
+            create_args.pt_disabled_xsave &= !features.xsave;
         }
         // Hyper-V hypercall-based fast paths (cluster IPI, TLB flush)
         // must be masked out in two situations:
@@ -429,7 +623,41 @@ impl hypervisor::Hypervisor for MshvHypervisor {
     ///
     /// Get the supported CpuID
     ///
-    fn get_supported_cpuid(&self) -> hypervisor::Result<Vec<CpuIdEntry>> {
+    fn get_supported_cpuid(
+        &self,
+        cpu_model: Option<crate::CpuModel>,
+    ) -> hypervisor::Result<Vec<CpuIdEntry>> {
+        if cpu_model.is_some() {
+            let mut cpuid = Vec::new();
+            for (function, index, indexed) in [
+                (0x0, 0, false),
+                (0x1, 0, false),
+                (0x6, 0, false),
+                (0x7, 0, true),
+                (0xb, 0, true),
+                (0xb, 1, true),
+                (0xd, 0, true),
+                (0xd, 1, true),
+                (0x8000_0000, 0, false),
+                (0x8000_0001, 0, false),
+                (0x8000_0007, 0, false),
+                (0x8000_0008, 0, false),
+                (0x8000_000a, 0, false),
+            ] {
+                let result = std::arch::x86_64::__cpuid_count(function, index);
+                cpuid.push(CpuIdEntry {
+                    function,
+                    index,
+                    flags: if indexed { CPUID_FLAG_VALID_INDEX } else { 0 },
+                    eax: result.eax,
+                    ebx: result.ebx,
+                    ecx: result.ecx,
+                    edx: result.edx,
+                });
+            }
+            return Ok(cpuid);
+        }
+
         let mut cpuid = Vec::new();
         let functions: [u32; 2] = [0x1, 0xb];
 
@@ -1474,13 +1702,85 @@ impl cpu::Vcpu for MshvVcpu {
     /// X86 specific call to setup the CPUID registers.
     ///
     fn set_cpuid2(&self, cpuid: &[CpuIdEntry]) -> cpu::Result<()> {
-        let cpuid: Vec<mshv_bindings::hv_cpuid_entry> = cpuid.iter().map(|e| (*e).into()).collect();
-        let mshv_cpuid = <CpuId>::from_entries(&cpuid)
+        let (exact, default): (Vec<&CpuIdEntry>, Vec<&CpuIdEntry>) =
+            cpuid.iter().partition(|entry| {
+                entry.flags
+                    & (CPUID_FLAG_EXACT_EAX
+                        | CPUID_FLAG_EXACT_EBX
+                        | CPUID_FLAG_EXACT_ECX
+                        | CPUID_FLAG_EXACT_EDX)
+                    != 0
+            });
+
+        let default: Vec<mshv_bindings::hv_cpuid_entry> =
+            default.into_iter().map(|entry| (*entry).into()).collect();
+        let mshv_cpuid = <CpuId>::from_entries(&default)
             .map_err(|_| cpu::HypervisorCpuError::SetCpuid(anyhow!("failed to create CpuId")))?;
 
         self.fd
             .register_intercept_result_cpuid(&mshv_cpuid)
-            .map_err(|e| cpu::HypervisorCpuError::SetCpuid(e.into()))
+            .map_err(|e| cpu::HypervisorCpuError::SetCpuid(e.into()))?;
+
+        for entry in exact {
+            let cpuid_params = hv_register_x64_cpuid_result_parameters {
+                input: hv_register_x64_cpuid_result_parameters__bindgen_ty_1 {
+                    eax: entry.function,
+                    ecx: entry.index,
+                    subleaf_specific: u8::from(entry.flags & CPUID_FLAG_VALID_INDEX != 0),
+                    always_override: 1,
+                    padding: 0,
+                },
+                result: hv_register_x64_cpuid_result_parameters__bindgen_ty_2 {
+                    eax: entry.eax,
+                    eax_mask: if entry.flags & CPUID_FLAG_EXACT_EAX != 0 {
+                        u32::MAX
+                    } else {
+                        0
+                    },
+                    ebx: entry.ebx,
+                    ebx_mask: if entry.flags & CPUID_FLAG_EXACT_EBX != 0 {
+                        u32::MAX
+                    } else {
+                        0
+                    },
+                    ecx: entry.ecx,
+                    ecx_mask: if entry.flags & CPUID_FLAG_EXACT_ECX != 0 {
+                        if entry.function == 1 {
+                            u32::MAX & !(1 << 27)
+                        } else {
+                            u32::MAX
+                        }
+                    } else {
+                        0
+                    },
+                    edx: entry.edx,
+                    edx_mask: if entry.flags & CPUID_FLAG_EXACT_EDX != 0 {
+                        u32::MAX
+                    } else {
+                        0
+                    },
+                },
+            };
+            let mut input = hv_input_register_intercept_result {
+                partition_id: 0,
+                vp_index: self.vp_index.into(),
+                intercept_type: hv_intercept_type_HV_INTERCEPT_TYPE_X64_CPUID,
+                parameters: hv_register_intercept_result_parameters {
+                    cpuid: cpuid_params,
+                },
+            };
+            let mut args = mshv_root_hvcall {
+                code: HVCALL_REGISTER_INTERCEPT_RESULT as u16,
+                in_sz: std::mem::size_of::<hv_input_register_intercept_result>() as u16,
+                in_ptr: &mut input as *mut _ as u64,
+                ..Default::default()
+            };
+            self.fd
+                .hvcall(&mut args)
+                .map_err(|e| cpu::HypervisorCpuError::SetCpuid(e.into()))?;
+        }
+
+        Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]

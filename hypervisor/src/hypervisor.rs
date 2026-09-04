@@ -14,6 +14,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 #[cfg(target_arch = "x86_64")]
+use crate::CpuModel;
+#[cfg(target_arch = "x86_64")]
 use crate::arch::x86::CpuIdEntry;
 #[cfg(target_arch = "x86_64")]
 use crate::cpu::CpuVendor;
@@ -127,7 +129,7 @@ pub trait Hypervisor: Send + Sync {
     ///
     /// Get the supported CpuID
     ///
-    fn get_supported_cpuid(&self) -> Result<Vec<CpuIdEntry>>;
+    fn get_supported_cpuid(&self, cpu_model: Option<CpuModel>) -> Result<Vec<CpuIdEntry>>;
     ///
     /// Check particular extensions if any
     ///

@@ -735,6 +735,9 @@ components:
         max_vcpus:
           minimum: 1
           type: integer
+        model:
+          type: string
+          enum: ["Skylake-Server", "Skylake-Server-IBRS", "Skylake-Server-noTSX-IBRS", "Cascadelake-Server", "Cascadelake-Server-noTSX", "Icelake-Server", "Icelake-Server-noTSX", "EPYC", "EPYC-Rome", "EPYC-Milan"]
         topology:
           $ref: "#/components/schemas/CpuTopology"
         kvm_hyperv:

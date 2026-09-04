@@ -264,6 +264,13 @@ impl fmt::Display for CpuIdEntry {
 }
 
 pub const CPUID_FLAG_VALID_INDEX: u32 = 1;
+// Internal markers for registers that must be overridden in full. KVM ignores
+// them when converting to kvm_cpuid_entry2; MSHV uses them to clear host bits
+// that are outside a selected named model.
+pub const CPUID_FLAG_EXACT_EAX: u32 = 1 << 16;
+pub const CPUID_FLAG_EXACT_EBX: u32 = 1 << 17;
+pub const CPUID_FLAG_EXACT_ECX: u32 = 1 << 18;
+pub const CPUID_FLAG_EXACT_EDX: u32 = 1 << 19;
 
 #[derive(Default, Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct FpuState {

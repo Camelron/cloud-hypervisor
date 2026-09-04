@@ -131,6 +131,8 @@ impl RequestHandler for StubApiRequestHandler {
                 cpus: CpusConfig {
                     boot_vcpus: 1,
                     max_vcpus: 1,
+                    #[cfg(target_arch = "x86_64")]
+                    model: None,
                     topology: None,
                     kvm_hyperv: false,
                     max_phys_bits: 46,

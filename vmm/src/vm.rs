@@ -3378,6 +3378,8 @@ impl Snapshottable for Vm {
                     #[cfg(feature = "tdx")]
                     tdx: false,
                     amx,
+                    cpu_model: self.config.lock().unwrap().cpus.model,
+                    nested: self.config.lock().unwrap().cpus.nested,
                 },
             )
             .map_err(|e| {

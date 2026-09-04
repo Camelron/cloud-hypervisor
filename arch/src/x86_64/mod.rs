@@ -11,6 +11,8 @@ pub mod interrupts;
 pub mod layout;
 pub mod regs;
 
+mod cpu_model;
+
 #[cfg(feature = "tdx")]
 pub mod tdx;
 
@@ -94,6 +96,8 @@ pub struct CpuidConfig {
     #[cfg(feature = "tdx")]
     pub tdx: bool,
     pub amx: bool,
+    pub cpu_model: Option<hypervisor::CpuModel>,
+    pub nested: bool,
 }
 
 #[derive(Debug, Error)]
@@ -145,6 +149,10 @@ pub enum Error {
     /// Error checking CPUID compatibility
     #[error("Error checking CPUID compatibility")]
     CpuidCheckCompatibility,
+
+    /// The selected named CPU model cannot be provided by this host
+    #[error("CPU model {model} is not supported: {reason}")]
+    CpuModelNotSupported { model: String, reason: String },
 
     // Error writing EBDA address
     #[error("Error writing EBDA address")]
@@ -624,7 +632,7 @@ pub fn generate_common_cpuid(
 
     // Supported CPUID
     let mut cpuid = hypervisor
-        .get_supported_cpuid()
+        .get_supported_cpuid(config.cpu_model)
         .map_err(Error::CpuidGetSupported)?;
 
     CpuidPatch::patch_cpuid(&mut cpuid, &cpuid_patches);
@@ -805,6 +813,15 @@ pub fn generate_common_cpuid(
                 ..Default::default()
             });
         }
+    }
+
+    if let Some(model) = config.cpu_model {
+        cpu_model::apply_cpu_model(
+            &mut cpuid,
+            model,
+            hypervisor.get_cpu_vendor(),
+            config.nested,
+        )?;
     }
 
     Ok(cpuid)

@@ -231,6 +231,10 @@ pub enum ValidationError {
     /// Too many CPUs.
     #[error("Too many CPUs: specified {0} but {MAX_SUPPORTED_CPUS} is the limit")]
     TooManyCpus(u32 /* specified CPUs */),
+    /// Named CPU models do not expose AMX.
+    #[cfg(target_arch = "x86_64")]
+    #[error("Named CPU models cannot be combined with the AMX CPU feature")]
+    CpuModelWithAmx,
     /// Missing file value for debug-console
     #[cfg(target_arch = "x86_64")]
     #[error("Path missing when using file mode for debug console")]
@@ -682,9 +686,10 @@ impl FromStr for CpuTopology {
 impl CpusConfig {
     pub fn parse(cpus: &str) -> Result<Self> {
         let mut parser = OptionParser::new();
+        parser.add("boot").add("max");
+        #[cfg(target_arch = "x86_64")]
+        parser.add("model");
         parser
-            .add("boot")
-            .add("max")
             .add("topology")
             .add("kvm_hyperv")
             .add("max_phys_bits")
@@ -702,6 +707,8 @@ impl CpusConfig {
             .convert("max")
             .map_err(Error::ParseCpus)?
             .unwrap_or(boot_vcpus);
+        #[cfg(target_arch = "x86_64")]
+        let model = parser.convert("model").map_err(Error::ParseCpus)?;
         let topology = parser.convert("topology").map_err(Error::ParseCpus)?;
         let kvm_hyperv = parser
             .convert::<Toggle>("kvm_hyperv")
@@ -758,6 +765,8 @@ impl CpusConfig {
         Ok(CpusConfig {
             boot_vcpus,
             max_vcpus,
+            #[cfg(target_arch = "x86_64")]
+            model,
             topology,
             kvm_hyperv,
             max_phys_bits,
@@ -3046,6 +3055,11 @@ impl VmConfig {
             return Err(ValidationError::TooManyCpus(self.cpus.max_vcpus));
         }
 
+        #[cfg(target_arch = "x86_64")]
+        if self.cpus.model.is_some() && self.cpus.features.amx {
+            return Err(ValidationError::CpuModelWithAmx);
+        }
+
         if let Some(rate_limit_groups) = &self.rate_limit_groups {
             for rate_limit_group in rate_limit_groups {
                 rate_limit_group.validate(self)?;
@@ -3750,6 +3764,19 @@ mod unit_tests {
                 ..Default::default()
             }
         );
+        #[cfg(target_arch = "x86_64")]
+        {
+            assert_eq!(
+                CpusConfig::parse("boot=1,model=Skylake-Server")?,
+                CpusConfig {
+                    boot_vcpus: 1,
+                    max_vcpus: 1,
+                    model: Some(hypervisor::CpuModel::SkylakeServer),
+                    ..Default::default()
+                }
+            );
+            CpusConfig::parse("boot=1,model=unknown").unwrap_err();
+        }
         assert_eq!(
             CpusConfig::parse("boot=8,topology=2:2:1:2")?,
             CpusConfig {
@@ -5265,6 +5292,17 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             invalid_config.validate(),
             Err(ValidationError::CpusMaxLowerThanBoot(16, 32))
         );
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut invalid_config = valid_config.clone();
+            invalid_config.cpus.model = Some(hypervisor::CpuModel::SkylakeServer);
+            invalid_config.cpus.features.amx = true;
+            assert_eq!(
+                invalid_config.validate(),
+                Err(ValidationError::CpuModelWithAmx)
+            );
+        }
 
         let mut invalid_config = valid_config.clone();
         invalid_config.cpus.max_vcpus = 16;
